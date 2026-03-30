@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mercedes-Benz E-Class 3D Viewer</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #app { width: 100vw; height: 100vh; }
+    #info-panel {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      font-family: Arial, sans-serif;
+      max-width: 300px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="info-panel"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

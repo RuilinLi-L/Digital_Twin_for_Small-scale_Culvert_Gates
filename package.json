@@ -1,0 +1,22 @@
+{
+  "name": "xiaohanshu",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@types/three": "^0.183.1",
+    "@vitejs/plugin-vue": "^6.0.4",
+    "three": "^0.183.2",
+    "vite": "^7.3.1",
+    "vue": "^3.5.29"
+  }
+}

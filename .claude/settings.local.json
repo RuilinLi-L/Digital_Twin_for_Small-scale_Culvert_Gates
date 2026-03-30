@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm init -y)",
+      "Bash(npm install three @types/three vite @vitejs/plugin-vue vue)",
+      "Bash(npm run dev)"
+    ]
+  }
+}
