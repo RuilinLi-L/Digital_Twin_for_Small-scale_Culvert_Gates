@@ -3,10 +3,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { componentCatalogById } from '../data/componentCatalog'
+
+const COMMENT_PARAMETER_NAME = '注释'
 
 const props = defineProps({
   modelPath: {
@@ -18,25 +22,32 @@ const props = defineProps({
 const emit = defineEmits(['model-loaded', 'part-clicked'])
 
 const container = ref(null)
-let scene, camera, renderer, controls, raycaster, mouse
+
+let scene
+let camera
+let renderer
+let controls
+let raycaster
+let mouse
+let animationFrameId = null
 let model = null
 
-// Three.js初始化
-const initThree = () => {
-  // 创建场景
-  scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x1a1a2e)
+const dracoLoader = new DRACOLoader()
+dracoLoader.setDecoderPath('/draco/gltf/')
+dracoLoader.preload()
 
-  // 创建相机
+const initThree = () => {
+  scene = new THREE.Scene()
+  scene.background = new THREE.Color(0x09111f)
+
   camera = new THREE.PerspectiveCamera(
-    75,
+    60,
     container.value.clientWidth / container.value.clientHeight,
     0.1,
-    1000
+    5000
   )
-  camera.position.set(5, 3, 5)
+  camera.position.set(60, 40, 80)
 
-  // 创建渲染器
   renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setSize(container.value.clientWidth, container.value.clientHeight)
   renderer.setPixelRatio(window.devicePixelRatio)
@@ -44,204 +55,261 @@ const initThree = () => {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   container.value.appendChild(renderer.domElement)
 
-  // 添加控制器
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.05
+  controls.target.set(0, 0, 0)
 
-  // 初始化射线检测
   raycaster = new THREE.Raycaster()
   mouse = new THREE.Vector2()
 
-  // 添加光照
   addLights()
-
-  // 添加坐标轴辅助
-  const axesHelper = new THREE.AxesHelper(5)
-  scene.add(axesHelper)
-
-  // 添加网格地面
-  const gridHelper = new THREE.GridHelper(20, 20)
-  scene.add(gridHelper)
+  scene.add(new THREE.AxesHelper(20))
+  scene.add(new THREE.GridHelper(200, 40, 0x3e9edc, 0x1f3957))
 }
 
-// 添加光照
 const addLights = () => {
-  // 环境光
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
-  scene.add(ambientLight)
+  scene.add(new THREE.AmbientLight(0xffffff, 0.75))
 
-  // 方向光
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
-  directionalLight.position.set(10, 20, 15)
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2)
+  directionalLight.position.set(120, 180, 100)
   directionalLight.castShadow = true
-  directionalLight.shadow.camera.left = -20
-  directionalLight.shadow.camera.right = 20
-  directionalLight.shadow.camera.top = 20
-  directionalLight.shadow.camera.bottom = -20
+  directionalLight.shadow.camera.left = -200
+  directionalLight.shadow.camera.right = 200
+  directionalLight.shadow.camera.top = 200
+  directionalLight.shadow.camera.bottom = -200
   directionalLight.shadow.mapSize.width = 2048
   directionalLight.shadow.mapSize.height = 2048
   scene.add(directionalLight)
 
-  // 点光源
-  const pointLight = new THREE.PointLight(0xffffff, 0.5)
-  pointLight.position.set(-10, 10, -10)
-  scene.add(pointLight)
+  const fillLight = new THREE.PointLight(0x9bdcff, 0.8)
+  fillLight.position.set(-80, 120, -60)
+  scene.add(fillLight)
 }
 
-// 加载GLTF模型
+const flattenParameters = (parameterGroups = []) =>
+  parameterGroups.flatMap((group) =>
+    (group.Parameters || []).map((parameter) => ({
+      groupName: group.GroupName || '',
+      name: parameter.name || '',
+      value: parameter.value ?? ''
+    }))
+  )
+
+const getParameterValue = (userData, parameterName) => {
+  const parameters = flattenParameters(userData?.Parameters)
+  const matchedParameter = parameters.find((parameter) => parameter.name === parameterName)
+  return typeof matchedParameter?.value === 'string'
+    ? matchedParameter.value.trim()
+    : matchedParameter?.value ?? ''
+}
+
+const getDisplayName = (object) => object.name || `Mesh_${object.uuid.slice(0, 8)}`
+
+const fitCameraToModel = (object) => {
+  const bounds = new THREE.Box3().setFromObject(object)
+
+  if (bounds.isEmpty()) {
+    return
+  }
+
+  const center = bounds.getCenter(new THREE.Vector3())
+  const size = bounds.getSize(new THREE.Vector3())
+  const maxDimension = Math.max(size.x, size.y, size.z)
+  const fov = camera.fov * (Math.PI / 180)
+  const cameraDistance = (maxDimension / (2 * Math.tan(fov / 2))) * 2.2
+
+  camera.position.set(
+    center.x + cameraDistance * 0.7,
+    center.y + cameraDistance * 0.45,
+    center.z + cameraDistance
+  )
+  camera.near = Math.max(0.1, maxDimension / 500)
+  camera.far = Math.max(5000, cameraDistance * 10)
+  camera.updateProjectionMatrix()
+
+  controls.target.copy(center)
+  controls.update()
+}
+
+const clearHighlight = () => {
+  scene.traverse((child) => {
+    if (!child.isMesh || !child.userData.originalMaterial) {
+      return
+    }
+
+    const highlightMaterial = child.material
+    const highlightedMaterials = Array.isArray(highlightMaterial)
+      ? highlightMaterial
+      : [highlightMaterial]
+
+    highlightedMaterials.forEach((material) => material?.dispose?.())
+
+    child.material = child.userData.originalMaterial
+    delete child.userData.originalMaterial
+  })
+}
+
+const createHighlightMaterial = () =>
+  new THREE.MeshBasicMaterial({
+    color: 0x00ff9c,
+    transparent: true,
+    opacity: 0.45
+  })
+
+const highlightObject = (object) => {
+  clearHighlight()
+
+  if (!object?.isMesh) {
+    return
+  }
+
+  object.userData.originalMaterial = object.material
+  object.material = Array.isArray(object.material)
+    ? object.material.map(() => createHighlightMaterial())
+    : createHighlightMaterial()
+}
+
+const buildPartInfo = (meshObject, point) => {
+  const commentId = getParameterValue(meshObject.userData, COMMENT_PARAMETER_NAME)
+  const fallbackId = meshObject.userData.ElementID
+    ? String(meshObject.userData.ElementID)
+    : meshObject.uuid
+  const id = commentId || fallbackId
+
+  return {
+    id,
+    commentId,
+    name: getDisplayName(meshObject),
+    elementId: meshObject.userData.ElementID
+      ? String(meshObject.userData.ElementID)
+      : '',
+    uniqueId: meshObject.userData.UniqueId || '',
+    catalogEntry: componentCatalogById[id] || null,
+    position: {
+      x: Number(point.x.toFixed(3)),
+      y: Number(point.y.toFixed(3)),
+      z: Number(point.z.toFixed(3))
+    }
+  }
+}
+
 const loadModel = async () => {
   const loader = new GLTFLoader()
+  loader.setDRACOLoader(dracoLoader)
 
   try {
     const gltf = await loader.loadAsync(props.modelPath)
     model = gltf.scene
-
-    // 调整模型位置和缩放
     model.position.set(0, 0, 0)
-    model.scale.set(0.01, 0.01, 0.01) // 根据模型大小调整
 
-    // 为所有网格添加点击检测
     model.traverse((child) => {
-      if (child.isMesh) {
-        // 为每个网格设置唯一ID
-        child.userData.id = child.uuid
-        child.userData.name = child.name || `Mesh_${child.uuid.substring(0, 8)}`
-
-        // 启用阴影
-        child.castShadow = true
-        child.receiveShadow = true
+      if (!child.isMesh) {
+        return
       }
+
+      child.castShadow = true
+      child.receiveShadow = true
+      child.userData.commentId = getParameterValue(child.userData, COMMENT_PARAMETER_NAME)
+      child.userData.displayName = getDisplayName(child)
     })
 
     scene.add(model)
+    fitCameraToModel(model)
     emit('model-loaded')
-
-    // 调整相机位置以适合模型
-    const box = new THREE.Box3().setFromObject(model)
-    const center = box.getCenter(new THREE.Vector3())
-    const size = box.getSize(new THREE.Vector3())
-
-    const maxDim = Math.max(size.x, size.y, size.z)
-    const fov = camera.fov * (Math.PI / 180)
-    let cameraZ = Math.abs(maxDim / Math.tan(fov / 2))
-
-    camera.position.set(center.x, center.y, cameraZ * 1.5)
-    controls.target.copy(center)
-    controls.update()
-
   } catch (error) {
     console.error('Error loading model:', error)
   }
 }
 
-// 处理点击事件
-const onMouseClick = (event) => {
-  if (!model) return
+const findPreferredIntersection = (intersections) => {
+  const selectableIntersection = intersections.find(({ object }) =>
+    Boolean(getParameterValue(object.userData, COMMENT_PARAMETER_NAME))
+  )
 
-  // 计算鼠标在归一化设备坐标中的位置
+  return selectableIntersection || intersections[0] || null
+}
+
+const onMouseClick = (event) => {
+  if (!model) {
+    return
+  }
+
   const rect = renderer.domElement.getBoundingClientRect()
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 
-  // 更新射线
   raycaster.setFromCamera(mouse, camera)
 
-  // 计算与模型的所有交点
-  const intersects = raycaster.intersectObject(model, true)
+  const intersections = raycaster.intersectObject(model, true)
+  const preferredIntersection = findPreferredIntersection(intersections)
 
-  if (intersects.length > 0) {
-    const clickedObject = intersects[0].object
-
-    // 向上查找最近的网格对象
-    let meshObject = clickedObject
-    while (meshObject && !meshObject.isMesh) {
-      meshObject = meshObject.parent
-    }
-
-    if (meshObject && meshObject.isMesh) {
-      const partInfo = {
-        id: meshObject.userData.id,
-        name: meshObject.userData.name,
-        position: intersects[0].point
-      }
-
-      emit('part-clicked', partInfo)
-
-      // 高亮选中的部件（可选）
-      highlightObject(meshObject)
-    }
+  if (!preferredIntersection?.object?.isMesh) {
+    return
   }
+
+  highlightObject(preferredIntersection.object)
+  emit('part-clicked', buildPartInfo(preferredIntersection.object, preferredIntersection.point))
 }
 
-// 高亮选中的对象
-const highlightObject = (object) => {
-  // 先清除之前的高亮
-  scene.traverse((child) => {
-    if (child.isMesh && child.userData.originalMaterial) {
-      child.material = child.userData.originalMaterial
-      delete child.userData.originalMaterial
-    }
-  })
-
-  // 保存原始材质并应用高亮材质
-  if (object.isMesh) {
-    object.userData.originalMaterial = object.material
-
-    const highlightMaterial = new THREE.MeshBasicMaterial({
-      color: 0x00ff00,
-      transparent: true,
-      opacity: 0.5
-    })
-
-    object.material = highlightMaterial
-  }
-}
-
-// 动画循环
 const animate = () => {
-  requestAnimationFrame(animate)
+  animationFrameId = requestAnimationFrame(animate)
   controls.update()
   renderer.render(scene, camera)
 }
 
-// 处理窗口大小变化
 const onWindowResize = () => {
+  if (!container.value || !camera || !renderer) {
+    return
+  }
+
   camera.aspect = container.value.clientWidth / container.value.clientHeight
   camera.updateProjectionMatrix()
   renderer.setSize(container.value.clientWidth, container.value.clientHeight)
 }
 
-// 组件挂载
+const unloadModel = () => {
+  if (!model) {
+    return
+  }
+
+  clearHighlight()
+  scene.remove(model)
+  model = null
+}
+
 onMounted(() => {
   initThree()
   loadModel()
   animate()
 
-  // 添加事件监听
   window.addEventListener('resize', onWindowResize)
   renderer.domElement.addEventListener('click', onMouseClick)
 })
 
-// 组件卸载
 onUnmounted(() => {
   window.removeEventListener('resize', onWindowResize)
-  renderer.domElement.removeEventListener('click', onMouseClick)
 
-  // 清理Three.js资源
-  if (renderer) {
-    renderer.dispose()
+  if (renderer?.domElement) {
+    renderer.domElement.removeEventListener('click', onMouseClick)
   }
+
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId)
+  }
+
+  unloadModel()
+  dracoLoader.dispose()
+  renderer?.dispose()
 })
 
-// 监听模型路径变化
-watch(() => props.modelPath, () => {
-  if (model) {
-    scene.remove(model)
-    model = null
+watch(
+  () => props.modelPath,
+  async () => {
+    unloadModel()
+    await loadModel()
   }
-  loadModel()
-})
+)
 </script>
 
 <style scoped>
