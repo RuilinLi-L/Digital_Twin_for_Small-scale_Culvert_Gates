@@ -36,6 +36,9 @@
       <p><strong>模型:</strong> simple-test.gltf（来源：简易.gltf）</p>
       <p><strong>ID 来源:</strong> Revit 构件属性“注释”</p>
       <p><strong>ID 表:</strong> {{ catalogSummary }}</p>
+      <p><strong>后端配置:</strong> {{ backendConfigText }}</p>
+      <p><strong>当前模式:</strong> {{ latestSyncModeText }}</p>
+      <p><strong>当前目标:</strong> {{ latestSyncTargetText }}</p>
       <p><strong>后端同步:</strong> {{ backendStatusText }}</p>
       <p><strong>当前布局:</strong> {{ isCompactLayout ? '移动端 / 窄屏' : '桌面端 / 宽屏' }}</p>
     </aside>
@@ -49,10 +52,40 @@
       <p><strong>Revit 注释:</strong> {{ selectedPart.commentId || '未填写' }}</p>
       <p><strong>ElementID:</strong> {{ selectedPart.elementId || '无' }}</p>
       <p><strong>UniqueId:</strong> {{ selectedPart.uniqueId || '无' }}</p>
-      <p><strong>后端发送:</strong> {{ selectedPart.syncStatus.label }}</p>
+      <p><strong>后端状态:</strong> {{ selectedPart.syncStatus.label }}</p>
+      <p><strong>同步模式:</strong> {{ selectedPart.syncStatus.modeLabel }}</p>
+      <p><strong>请求目标:</strong> {{ selectedPart.syncStatus.target || '浏览器控制台' }}</p>
       <p v-if="selectedPart.syncStatus.message">
         <strong>说明:</strong> {{ selectedPart.syncStatus.message }}
       </p>
+
+      <div v-if="shouldShowBackendDetails" class="backend-details">
+        <h3>后端数据</h3>
+        <template v-if="selectedBackendBaseInfo">
+          <p><strong>基础信息 ID:</strong> {{ selectedBackendBaseInfo.id }}</p>
+          <p><strong>基础信息名称:</strong> {{ selectedBackendBaseInfo.name }}</p>
+          <p><strong>基础信息材质:</strong> {{ selectedBackendBaseInfo.material }}</p>
+          <p><strong>基础信息规格:</strong> {{ selectedBackendBaseInfo.specification }}</p>
+        </template>
+        <p v-else>基础信息暂无返回。</p>
+
+        <div class="maintenance-section">
+          <h4>维修记录</h4>
+          <ul v-if="selectedMaintenanceHistory.length" class="maintenance-list">
+            <li
+              v-for="historyItem in selectedMaintenanceHistory"
+              :key="historyItem.key"
+              class="maintenance-item"
+            >
+              <p><strong>时间:</strong> {{ historyItem.maintenanceTime }}</p>
+              <p><strong>处理措施:</strong> {{ historyItem.actionTaken }}</p>
+              <p><strong>问题描述:</strong> {{ historyItem.issueDescription }}</p>
+              <p><strong>责任人:</strong> {{ historyItem.responsiblePerson }}</p>
+            </li>
+          </ul>
+          <p v-else>暂无维修记录。</p>
+        </div>
+      </div>
 
       <div class="info-actions">
         <button type="button" class="ghost-button" @click="toggleInfoPanel">
@@ -89,7 +122,14 @@ import ThreeScene from './components/ThreeScene.vue'
 import { componentCatalog } from './data/componentCatalog'
 
 const modelPath = '/models/simple-test.gltf'
-const backendUrl = (import.meta.env.VITE_COMPONENT_ID_API_URL || '').trim()
+const queryApiBaseUrl = (import.meta.env.VITE_COMPONENT_QUERY_API_BASE_URL || '').trim()
+const legacyBackendUrl = (import.meta.env.VITE_COMPONENT_ID_API_URL || '').trim()
+
+const syncModeLabels = {
+  'query-get': '按 ID 查询（GET）',
+  'legacy-post': '固定地址同步（POST）',
+  'local-only': '本地验证'
+}
 
 const loading = ref(true)
 const sceneRef = ref(null)
@@ -97,15 +137,35 @@ const selectedPart = ref(null)
 const showStatusPanel = ref(true)
 const showInfoPanel = ref(false)
 const isCompactLayout = ref(false)
+const latestSyncResult = ref(null)
 const lastSyncStatus = ref(
-  backendUrl
-    ? `已配置 ${backendUrl}`
-    : '未配置 VITE_COMPONENT_ID_API_URL，当前先验证统一 ID 提取'
+  queryApiBaseUrl
+    ? `已配置按 ID 查询接口：${queryApiBaseUrl}`
+    : legacyBackendUrl
+      ? `已配置固定 POST 接口：${legacyBackendUrl}`
+      : '未配置后端地址，当前先验证统一 ID 提取'
 )
 let compactMediaQuery = null
 
 const catalogSummary = computed(() => `${componentCatalog.length} 条映射（ID 1-6）`)
 const backendStatusText = computed(() => lastSyncStatus.value)
+const backendConfigText = computed(() => {
+  if (queryApiBaseUrl) {
+    return `按 ID 查询接口（GET ${queryApiBaseUrl}/{id}）`
+  }
+
+  if (legacyBackendUrl) {
+    return `固定 POST 接口（${legacyBackendUrl}）`
+  }
+
+  return '未配置后端接口，当前只验证统一 ID 提取'
+})
+const latestSyncModeText = computed(() =>
+  getSyncModeLabel(latestSyncResult.value?.mode || getConfiguredMode())
+)
+const latestSyncTargetText = computed(() =>
+  latestSyncResult.value?.target || getConfiguredTarget()
+)
 const interactionHint = computed(() =>
   isCompactLayout.value
     ? '单指旋转，双指缩放，轻点模型即可选中构件。'
@@ -118,10 +178,91 @@ const infoToggleLabel = computed(() => {
 
   return showInfoPanel.value ? '隐藏构件信息' : '显示构件信息'
 })
+const selectedSyncStatus = computed(() => selectedPart.value?.syncStatus || null)
+const shouldShowBackendDetails = computed(() => selectedSyncStatus.value?.mode === 'query-get')
+const selectedBackendBaseInfo = computed(() => {
+  const baseInfo = selectedSyncStatus.value?.backendData?.base_info
+
+  if (!baseInfo || typeof baseInfo !== 'object' || Array.isArray(baseInfo)) {
+    return null
+  }
+
+  return {
+    id: toDisplayText(getLooseField(baseInfo, 'ID')),
+    name: toDisplayText(getLooseField(baseInfo, 'Name')),
+    material: toDisplayText(getLooseField(baseInfo, 'Material')),
+    specification: toDisplayText(getLooseField(baseInfo, 'Specification'))
+  }
+})
+const selectedMaintenanceHistory = computed(() => {
+  const maintenanceHistory = selectedSyncStatus.value?.backendData?.maintenance_history
+
+  if (!Array.isArray(maintenanceHistory)) {
+    return []
+  }
+
+  return maintenanceHistory.map((record, index) => ({
+    key: `${getLooseField(record, 'MaintenanceTime') || index}-${getLooseField(record, 'ComponentID') || ''}`,
+    maintenanceTime: toDisplayText(getLooseField(record, 'MaintenanceTime')),
+    actionTaken: toDisplayText(getLooseField(record, 'ActionTaken')),
+    issueDescription: toDisplayText(getLooseField(record, 'IssueDescription')),
+    responsiblePerson: toDisplayText(getLooseField(record, 'ResponsiblePerson'))
+  }))
+})
 
 const onModelLoaded = () => {
   loading.value = false
 }
+
+const getConfiguredMode = () => {
+  if (queryApiBaseUrl) {
+    return 'query-get'
+  }
+
+  if (legacyBackendUrl) {
+    return 'legacy-post'
+  }
+
+  return 'local-only'
+}
+
+const getConfiguredTarget = () => {
+  if (queryApiBaseUrl) {
+    return `${queryApiBaseUrl}/{id}`
+  }
+
+  if (legacyBackendUrl) {
+    return legacyBackendUrl
+  }
+
+  return '浏览器控制台'
+}
+
+const getSyncModeLabel = (mode) => syncModeLabels[mode] || '未识别模式'
+
+const toDisplayText = (value, fallback = '无') => {
+  if (value == null) {
+    return fallback
+  }
+
+  const text = String(value).trim()
+  return text || fallback
+}
+
+const getLooseField = (record, key) => {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return undefined
+  }
+
+  if (key in record) {
+    return record[key]
+  }
+
+  const matchedKey = Object.keys(record).find((currentKey) => currentKey.trim() === key)
+  return matchedKey ? record[matchedKey] : undefined
+}
+
+const getErrorMessage = (error) => (error instanceof Error ? error.message : String(error))
 
 const syncResponsiveMode = (matches) => {
   isCompactLayout.value = matches
@@ -140,23 +281,70 @@ const buildBackendPayload = (partInfo) => ({
   position: partInfo.position
 })
 
-const syncSelectionToBackend = async (partInfo) => {
-  const payload = buildBackendPayload(partInfo)
+const createSyncResult = ({
+  label,
+  message,
+  payload,
+  mode,
+  target,
+  backendData = null
+}) => ({
+  label,
+  message,
+  payload,
+  mode,
+  modeLabel: getSyncModeLabel(mode),
+  target,
+  backendData
+})
 
-  if (!backendUrl) {
-    const message = '未配置后端地址，已在控制台输出待发送 payload'
-    console.info('[component-selection payload]', payload)
-    lastSyncStatus.value = message
+const rememberSyncResult = (result) => {
+  latestSyncResult.value = result
+  lastSyncStatus.value = result.message
+  return result
+}
 
-    return {
-      label: '未发送',
-      message,
-      payload
-    }
-  }
+const buildQueryUrl = (partId) =>
+  `${queryApiBaseUrl.replace(/\/+$/, '')}/${encodeURIComponent(partId)}`
+
+const querySelectionFromBackend = async (partInfo, payload) => {
+  const queryUrl = buildQueryUrl(partInfo.id)
 
   try {
-    const response = await fetch(backendUrl, {
+    const response = await fetch(queryUrl)
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const backendData = await response.json()
+    return rememberSyncResult(
+      createSyncResult({
+        label: '已查询',
+        message: `已从 ${queryUrl} 查询构件数据`,
+        payload,
+        mode: 'query-get',
+        target: queryUrl,
+        backendData
+      })
+    )
+  } catch (error) {
+    console.error('[component-selection query error]', error)
+    return rememberSyncResult(
+      createSyncResult({
+        label: '查询失败',
+        message: `查询失败：${getErrorMessage(error)}（${queryUrl}）`,
+        payload,
+        mode: 'query-get',
+        target: queryUrl
+      })
+    )
+  }
+}
+
+const syncSelectionToLegacyBackend = async (payload) => {
+  try {
+    const response = await fetch(legacyBackendUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -168,25 +356,50 @@ const syncSelectionToBackend = async (partInfo) => {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    const message = `已发送到 ${backendUrl}`
-    lastSyncStatus.value = message
-
-    return {
-      label: '已发送',
-      message,
-      payload
-    }
+    return rememberSyncResult(
+      createSyncResult({
+        label: '已发送',
+        message: `已发送到 ${legacyBackendUrl}`,
+        payload,
+        mode: 'legacy-post',
+        target: legacyBackendUrl
+      })
+    )
   } catch (error) {
-    const message = `发送失败：${error.message}`
     console.error('[component-selection sync error]', error)
-    lastSyncStatus.value = message
-
-    return {
-      label: '发送失败',
-      message,
-      payload
-    }
+    return rememberSyncResult(
+      createSyncResult({
+        label: '发送失败',
+        message: `发送失败：${getErrorMessage(error)}（${legacyBackendUrl}）`,
+        payload,
+        mode: 'legacy-post',
+        target: legacyBackendUrl
+      })
+    )
   }
+}
+
+const syncSelectionToBackend = async (partInfo) => {
+  const payload = buildBackendPayload(partInfo)
+
+  if (queryApiBaseUrl) {
+    return querySelectionFromBackend(partInfo, payload)
+  }
+
+  if (legacyBackendUrl) {
+    return syncSelectionToLegacyBackend(payload)
+  }
+
+  console.info('[component-selection payload]', payload)
+  return rememberSyncResult(
+    createSyncResult({
+      label: '本地预览',
+      message: '未配置后端地址，已在控制台输出待处理 payload',
+      payload,
+      mode: 'local-only',
+      target: '浏览器控制台'
+    })
+  )
 }
 
 const onPartClicked = async (partInfo) => {
@@ -389,11 +602,17 @@ onBeforeUnmount(() => {
 .status-panel {
   top: calc(132px + env(safe-area-inset-top));
   right: calc(20px + env(safe-area-inset-right));
+  max-height: calc(100vh - 152px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  max-height: calc(100dvh - 152px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y: auto;
 }
 
 .info-panel {
   top: calc(20px + env(safe-area-inset-top));
   left: calc(20px + env(safe-area-inset-left));
+  max-height: calc(100vh - 40px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  max-height: calc(100dvh - 40px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y: auto;
 }
 
 .overlay-panel h2 {
@@ -406,6 +625,49 @@ onBeforeUnmount(() => {
   margin: 0 0 8px;
   line-height: 1.55;
   word-break: break-word;
+}
+
+.backend-details {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(135, 206, 235, 0.16);
+}
+
+.backend-details h3,
+.maintenance-section h4 {
+  margin: 0 0 10px;
+  color: #8de2ff;
+}
+
+.backend-details h3 {
+  font-size: 16px;
+}
+
+.maintenance-section {
+  margin-top: 14px;
+}
+
+.maintenance-section h4 {
+  font-size: 14px;
+}
+
+.maintenance-list {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  display: grid;
+  gap: 10px;
+}
+
+.maintenance-item {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(135, 206, 235, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.maintenance-item p:last-child {
+  margin-bottom: 0;
 }
 
 .info-actions {

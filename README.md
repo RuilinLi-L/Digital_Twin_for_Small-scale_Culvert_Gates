@@ -95,6 +95,71 @@ npm run build
 npm run preview
 ```
 
+## 后端接入配置
+
+当前版本支持两种后端接入方式，默认优先级如下：
+
+1. 如果配置了 `VITE_COMPONENT_QUERY_API_BASE_URL`，前端会优先使用按构件 ID 查询的接口：
+
+```text
+GET {VITE_COMPONENT_QUERY_API_BASE_URL}/{partInfo.id}
+```
+
+示例：
+
+```env
+VITE_COMPONENT_QUERY_API_BASE_URL=http://172.20.10.14:5000/api/component
+```
+
+当点击统一 ID 为 `1` 的构件时，前端会请求：
+
+```text
+http://172.20.10.14:5000/api/component/1
+```
+
+2. 如果未配置上面的查询接口，但配置了 `VITE_COMPONENT_ID_API_URL`，前端会回退到旧的固定地址同步方式：
+
+```text
+POST {VITE_COMPONENT_ID_API_URL}
+```
+
+示例：
+
+```env
+VITE_COMPONENT_ID_API_URL=http://127.0.0.1:8000/component-id
+```
+
+旧接口的请求体会继续保持当前结构：
+
+```json
+{
+  "ID": "1",
+  "commentId": "1",
+  "elementId": "12345",
+  "uniqueId": "xxxxx-xxxxx",
+  "modelName": "Mesh_xxxx",
+  "componentName": "闸门",
+  "material": "混凝土",
+  "position": {
+    "x": 1.234,
+    "y": 2.345,
+    "z": 3.456
+  }
+}
+```
+
+3. 如果两个环境变量都没有配置，前端不会请求后端，而是把待处理 payload 输出到浏览器控制台，便于本地联调验证。
+
+推荐在项目根目录创建 `.env.local`，按需写入以下任意一种配置：
+
+```env
+# 新接口，优先使用
+VITE_COMPONENT_QUERY_API_BASE_URL=http://172.20.10.14:5000/api/component
+
+# 旧接口，作为兼容方案保留
+# VITE_COMPONENT_ID_API_URL=http://127.0.0.1:8000/component-id
+```
+
 ## 交互说明
 
 - 鼠标左键拖动：旋转视角
