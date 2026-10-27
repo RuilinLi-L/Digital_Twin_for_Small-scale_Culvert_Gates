@@ -1,0 +1,10 @@
+.env
+.env.*
+*.pem
+deployment/
+database/
+scripts/
+2022_mercedes-benz_e-class_amg_line/
+model/
+.claude/
+*.log

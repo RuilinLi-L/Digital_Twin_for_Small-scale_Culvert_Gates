@@ -1,0 +1,17 @@
+CREATE TABLE IF NOT EXISTS Components (
+  ID INT UNSIGNED NOT NULL PRIMARY KEY,
+  Name VARCHAR(128) NOT NULL,
+  Material VARCHAR(128) NULL,
+  Specification VARCHAR(512) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS MaintenanceRecords (
+  ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ComponentID INT UNSIGNED NOT NULL,
+  MaintenanceTime DATETIME NOT NULL,
+  ActionTaken TEXT NULL,
+  IssueDescription TEXT NULL,
+  ResponsiblePerson VARCHAR(128) NULL,
+  INDEX component_history (ComponentID, MaintenanceTime, ID),
+  CONSTRAINT maintenance_component FOREIGN KEY (ComponentID) REFERENCES Components(ID)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

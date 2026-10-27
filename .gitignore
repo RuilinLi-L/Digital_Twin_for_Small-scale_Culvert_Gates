@@ -3,3 +3,10 @@ dist/
 .vscode/
 *.log
 .DS_Store
+.env.local
+.env.*.local
+deployment/releases/
+deployment/evidence/
+.vercel/
+*.pem
+__pycache__/

@@ -1,5 +1,163 @@
 # 小型涵闸数字孪生项目
 
+## Vercel + MySQL 数据库接入
+
+当前目标为 Vercel 托管 Vue 前端和查询 API，Cloudflare 管理域名，独立云 MySQL 保存数据。
+初始内容仅为项目已有的 6 条构件映射，维修记录留空，不生成虚构维修历史。
+
+### 接口和数据表
+
+- `GET /api/component/{id}`：返回 `base_info` 与 `maintenance_history`，保持原后端的返回结构。
+- `GET /api/health`：同时检查两张表及所需字段是否可查询。就绪返回 200，否则返回 503。
+- `Components`：构件 ID、名称、材质、规格。
+- `MaintenanceRecords`：构件 ID、维修时间、问题、措施、责任人，按时间倒序显示。
+- 当前 API 只提供查询，不开放新增、修改或删除接口。
+- 未建档构件返回 404；非法 ID 返回 400；非 GET 请求返回 405；数据库故障返回不含连接详情的 503。
+
+### 初始化真实数据库
+
+选择非中国内地的 MySQL 服务。Aiven 提供无需绑卡的免费 MySQL 方案，额度与可用地域以控制台显示为准：
+[免费服务说明](https://aiven.io/docs/products/mysql/concepts/mysql-free-tier)。
+
+1. 创建服务并确认方案为 Free，保存主机、端口、数据库名和连接账号，下载 CA 证书。
+2. 将 `.env.database.example` 复制为 `.env.database.local`，填写连接信息。
+   默认强制 TLS 验证；需要自有 CA 的服务必须提供 `MYSQL_SSL_CA` 或 `MYSQL_SSL_CA_BASE64`。
+3. 执行 `npm run db:init`。脚本只创建缺失的表并补充缺失的 6 条构件映射，
+   不覆盖已有构件，不添加维修记录，也不删除数据。
+
+初始化需要建表和插入权限。上线时为 API 使用只读数据库账号，只授予两张表的 SELECT 权限；
+管理员连接仅用于初始化或导入资料，不交给浏览器。
+
+### Vercel 配置
+
+沿用现有的 `digital-twin-for-small-scale-culvert-gates` 项目，框架为 Vite，
+构建命令 `npm run build`，输出目录 `dist`。`api/` 下的两个函数会作为后端部署。
+
+在 Vercel 的服务端 Environment Variables 填写以下值，配置到需要连接数据库的环境：
+
+| 变量 | 内容 |
+| --- | --- |
+| `MYSQL_HOST` | 数据库服务主机 |
+| `MYSQL_PORT` | 数据库端口 |
+| `MYSQL_USER` | API 的只读账号 |
+| `MYSQL_PASSWORD` | 该账号密码 |
+| `MYSQL_DATABASE` | 实际数据库名称 |
+| `MYSQL_SSL` | `true` |
+| `MYSQL_SSL_CA_BASE64` | CA 证书的 base64 内容，如服务商使用公共可信证书可留空 |
+
+后端以连接池复用连接，每个函数实例最多 3 个连接，并接入 Vercel 的连接池清理机制。
+在项目设置中尽量将 Functions Region 选在数据库所在地区附近。
+上述 MYSQL 变量不得添加 `VITE_` 前缀，也不要上传 `.env.database.local` 或 CA 文件。
+
+生产构建默认请求同域 `/api/component/{id}`。如果项目中仍有旧的
+`VITE_COMPONENT_QUERY_API_BASE_URL` / `VITE_COMPONENT_ID_API_URL` 环境变量，
+将查询地址设为 `/api/component` 并移除旧局域网地址，再重新部署。
+纯展示模式仍可显式设置 `VITE_COMPONENT_QUERY_API_BASE_URL` 为空后构建。
+
+配置完毕后先部署 Preview，检查 `/api/health` 为 200，再点击模型构件验证返回信息，
+通过后再发布 Production。Cloudflare DNS 使用 Vercel 对域名给出的具体记录值。
+
+### 本地运行及重复验收
+
+Node.js 使用 20.19+ 或 22.12+；安装依赖后执行：
+
+```bash
+npm ci --no-audit --no-fund
+npm run db:init
+VITE_COMPONENT_QUERY_API_BASE_URL=/api/component npm run dev:database
+```
+
+或者先 `npm run build`，再使用生产前端与同一套 API 进行本地预览：
+
+```bash
+node --env-file=.env.database.local node_modules/vite/bin/vite.js preview --host 127.0.0.1
+node scripts/verify-api.mjs http://127.0.0.1:4173 deployment/evidence/api-verification.json
+```
+
+`verify-api.mjs` 对运行中的 HTTP 服务和真实 MySQL 验证查询、404/400/405、并发访问，
+并保存 JSON 验收报告。设置 `EXPECT_DATABASE_UNAVAILABLE=1` 可验证未配置或连接失败场景。
+测试使用的维修记录只能放入隔离测试数据库，不得导入正式数据库。
+
+浏览器需验证点击构件后显示数据库基础信息、维修记录为空时的展示，以及查询过程中
+切换或清除选择后旧响应不会重新打开已关闭面板。验证截图保存在 `deployment/evidence/`。
+
+以下为此前 ECS 私有预览准备记录；Vercel 上线不需要启用这些 Nginx 配置。
+
+## 阿里云部署准备（纯三维展示）
+
+2026-10-27 确认当前阶段只展示三维模型和构件信息，不接数据库。
+部署构建会明确清空两个后端环境变量，避免继承开发环境的局域网接口地址。
+
+### 构建部署包
+
+需要 Node.js 20.19+ 或 22.12+、npm、Python 3。
+
+```bash
+npm ci --no-audit --no-fund
+bash deployment/scripts/build_release.sh display
+```
+
+输出位于 `deployment/releases/<发布编号>.tar.gz`，包括静态文件、Nginx 配置、
+验证及停止预览脚本，以及 `SHA256SUMS` 文件校验清单。生成文件已加入忽略规则。
+
+### 在服务器准备私有预览
+
+将部署包上传并解压到 `/srv/smartsluice/releases/`，然后执行：
+
+```bash
+bash /srv/smartsluice/releases/<发布编号>/deployment/scripts/prepare_preview.sh
+```
+
+预览运行在服务器的 `127.0.0.1:18080`，使用独立的 Nginx 配置和 PID，
+不会启用正式站点或修改现有 80/443 站点。服务器重启后需要重新运行预览脚本。
+当前前端可选择构件并展示模型属性；`/api/` 明确返回 JSON 503，表示数据服务未配置。
+
+本机建立 SSH 转发后，通过 `http://127.0.0.1:18180/` 预览：
+
+```bash
+ssh -N -L 127.0.0.1:18180:127.0.0.1:18080 root@39.106.170.157
+```
+
+SSH 密码仅在交互提示中输入，不写入项目或部署包。
+
+### 重复验证及停止预览
+
+```bash
+python3 deployment/scripts/verify_http.py http://127.0.0.1:18180 \
+  --output deployment/evidence/http-verification.json
+```
+
+验证首页、生产 JS/CSS、模型及其二进制、Draco 解码器、健康检查、
+不存在的资源返回 404，以及未启用的数据接口返回 JSON 503。
+验证报告包括响应状态、资源字节数和 SHA-256，保存在本地；服务器报告位于
+`/srv/smartsluice/preview/http-verification.json`。
+浏览器另行验证模型渲染、点击构件、清除选择和复位视角。
+
+停止时只退出预览使用的 Nginx：
+
+```bash
+bash /srv/smartsluice/releases/<发布编号>/deployment/scripts/stop_preview.sh
+```
+
+### 正式切换前仍需完成
+
+- 当前预览未修改域名、阿里云安全组或正式站点。`smartsluice-http.conf` 是待启用的配置。
+- 确认服务器地域和 ICP 备案状态；中国内地服务器公开提供网站服务需要完成相应备案。
+- 在正式切换时，将 `/srv/smartsluice/current` 指向通过验证的发布目录，
+  备份 `/etc/nginx`，安装待启用配置并通过 `nginx -t` 后才 reload。
+- Cloudflare 中将 `@` 的 A 记录指向 `39.106.170.157`，将 `www` 的 CNAME 指向 `smartsluice.cn`。
+- 核对安全组 80/443、申请并配置 TLS 证书，然后开启 HTTP 到 HTTPS 跳转。
+- 上线后需要回退时，恢复前一个 `current` 指向及备份的 Nginx 配置，验证后 reload；
+  若恢复原 Vercel 站点，还需恢复切换前的 DNS 记录。正式切换前应保存当时的记录值。
+
+服务器旧文件 `/srv/culvert-api/app.py` 未启用。MySQL 当前只有系统数据库，
+没有旧代码要求的 `sluice_db`。将来接数据时需提供真实数据库，
+使用专用数据库账号和独立服务，通过同源 `/api/component/{id}` 对接。
+`build_release.sh api` 只生成带接口地址的前端，不能代替后端、数据库及 Nginx 代理配置。
+
+参考：[Cloudflare 修改 DNS 记录](https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/)、
+[阿里云备案要求](https://help.aliyun.com/zh/icp-filing/basic-icp-service/support/for-the-record-process-faq)。
+
 ## 项目简介
 
 这是一个面向**小型涵闸数字孪生场景**的前端初版项目，目前主要完成了基础框架搭建，用于验证 3D 模型展示与交互功能是否可行。
@@ -12,7 +170,7 @@
 - 模型部件点击选中
 - 选中部件信息显示与高亮反馈
 
-由于真实涵闸模型尚未接入，当前版本暂时使用了一个**车辆 3D 模型**作为占位示例，用来验证整体框架、交互逻辑和渲染流程。后续可以将其替换为涵闸本体、闸门、启闭机及相关附属结构模型。
+当前主场景加载 `public/models/simple-test.gltf` 简化涵闸模型，用于验证构件选择、统一 ID 和数据库信息展示。后续可进一步接入工程级精细模型和监测数据。
 
 ## 当前版本定位
 
@@ -26,6 +184,7 @@
 - 基于 Raycaster 的点击拾取
 - 模型部件选中后的高亮与信息展示
 - 页面尺寸变化时的自适应渲染
+- Vercel 查询 API、MySQL 构件及维修记录查询（需配置真实云数据库连接）
 
 当前版本暂未实现：
 
@@ -33,7 +192,7 @@
 - 闸门开闭状态动画
 - 传感器数据联动
 - 水位、流量、设备状态等业务信息展示
-- 后端数据接口与实时通信
+- 传感器实时通信与远程控制
 
 ## 技术栈
 
@@ -148,7 +307,8 @@ VITE_COMPONENT_ID_API_URL=http://127.0.0.1:8000/component-id
 }
 ```
 
-3. 如果两个环境变量都没有配置，前端不会请求后端，而是把待处理 payload 输出到浏览器控制台，便于本地联调验证。
+3. 开发环境未配置接口时仅输出 payload。生产构建默认使用同域 `/api/component`；
+   若需要纯三维展示，请显式将 `VITE_COMPONENT_QUERY_API_BASE_URL` 设为空后重新构建。
 
 推荐在项目根目录创建 `.env.local`，按需写入以下任意一种配置：
 
@@ -182,7 +342,7 @@ VITE_COMPONENT_QUERY_API_BASE_URL=http://172.20.10.14:5000/api/component
 
 后续可以围绕“小型涵闸数字孪生”继续扩展以下方向：
 
-1. 替换当前演示车辆模型，接入真实涵闸 3D 模型。
+1. 完善当前简化涵闸模型，接入工程级精细 3D 模型。
 2. 增加闸门启闭动画，模拟设备运行过程。
 3. 接入水位、流量、闸位、设备状态等监测数据。
 4. 增加设备信息面板、告警面板和运行状态面板。
@@ -191,7 +351,7 @@ VITE_COMPONENT_QUERY_API_BASE_URL=http://172.20.10.14:5000/api/component
 
 ## 示例模型说明
 
-当前仓库内的车辆模型仅用于前期框架验证与交互演示，不代表项目最终的业务模型。
+仓库仍保留前期框架验证使用的车辆模型资源；当前主场景已使用简化涵闸模型。历史车辆模型的来源信息如下。
 
 示例模型信息如下：
 

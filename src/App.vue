@@ -122,7 +122,9 @@ import ThreeScene from './components/ThreeScene.vue'
 import { componentCatalog } from './data/componentCatalog'
 
 const modelPath = '/models/simple-test.gltf'
-const queryApiBaseUrl = (import.meta.env.VITE_COMPONENT_QUERY_API_BASE_URL || '').trim()
+const queryApiBaseUrl = (
+  import.meta.env.VITE_COMPONENT_QUERY_API_BASE_URL ?? (import.meta.env.PROD ? '/api/component' : '')
+).trim()
 const legacyBackendUrl = (import.meta.env.VITE_COMPONENT_ID_API_URL || '').trim()
 
 const syncModeLabels = {
@@ -146,6 +148,7 @@ const lastSyncStatus = ref(
       : '未配置后端地址，当前先验证统一 ID 提取'
 )
 let compactMediaQuery = null
+let selectionVersion = 0
 
 const catalogSummary = computed(() => `${componentCatalog.length} 条映射（ID 1-6）`)
 const backendStatusText = computed(() => lastSyncStatus.value)
@@ -299,6 +302,7 @@ const createSyncResult = ({
 })
 
 const rememberSyncResult = (result) => {
+  if (!selectedPart.value || result.payload.ID !== selectedPart.value.id) return result
   latestSyncResult.value = result
   lastSyncStatus.value = result.message
   return result
@@ -311,13 +315,13 @@ const querySelectionFromBackend = async (partInfo, payload) => {
   const queryUrl = buildQueryUrl(partInfo.id)
 
   try {
-    const response = await fetch(queryUrl)
+    const response = await fetch(queryUrl, { signal: AbortSignal.timeout(10000) })
+    const backendData = await response.json()
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
+      throw new Error(backendData.message || `HTTP ${response.status}`)
     }
 
-    const backendData = await response.json()
     return rememberSyncResult(
       createSyncResult({
         label: '已查询',
@@ -403,19 +407,28 @@ const syncSelectionToBackend = async (partInfo) => {
 }
 
 const onPartClicked = async (partInfo) => {
-  const syncStatus = await syncSelectionToBackend(partInfo)
+  const version = ++selectionVersion
   selectedPart.value = {
     ...partInfo,
-    syncStatus
+    syncStatus: createSyncResult({
+      label: queryApiBaseUrl ? '查询中' : '处理中',
+      message: queryApiBaseUrl ? '正在获取构件数据' : '正在处理构件选择',
+      payload: buildBackendPayload(partInfo),
+      mode: getConfiguredMode(),
+      target: queryApiBaseUrl ? buildQueryUrl(partInfo.id) : getConfiguredTarget()
+    })
   }
   showInfoPanel.value = true
 
   if (isCompactLayout.value) {
     showStatusPanel.value = false
   }
+  const syncStatus = await syncSelectionToBackend(partInfo)
+  if (version === selectionVersion && selectedPart.value) selectedPart.value.syncStatus = syncStatus
 }
 
 const onSelectionCleared = () => {
+  selectionVersion++
   selectedPart.value = null
   showInfoPanel.value = false
 }
@@ -447,6 +460,7 @@ const resetCamera = () => {
 }
 
 const clearSelection = () => {
+  selectionVersion++
   selectedPart.value = null
   showInfoPanel.value = false
   sceneRef.value?.clearSelection?.()

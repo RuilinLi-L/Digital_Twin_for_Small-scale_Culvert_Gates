@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
+import { localApi } from './server/vite-api.js'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), localApi()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
