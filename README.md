@@ -1,207 +1,70 @@
-# 小型涵闸数字孪生项目
+# 涵闸智维 · Vercel 独立部署版
 
-## 项目简介
+此目录使用最新 Next.js 三维界面，检修记录保存到 Vercel 专用 PostgreSQL。相邻的 hanzha-aliyun 目录继续使用自己的 JSON 数据卷，两份部署不共享检修记录。
 
-这是一个面向**小型涵闸数字孪生场景**的前端初版项目，目前主要完成了基础框架搭建，用于验证 3D 模型展示与交互功能是否可行。
+6 个构件档案与三维示意模型随源码发布，数据库初始检修记录为空。页面原有两条“演示样例”仍明确标注，不写入数据库。
 
-现阶段项目的重点不是还原完整业务，而是先把数字孪生系统中最基础的可视化能力跑通，包括：
+## 本机运行
 
-- 3D 场景初始化与渲染
-- 模型加载与展示
-- 视角旋转、缩放、平移
-- 模型部件点击选中
-- 选中部件信息显示与高亮反馈
-
-由于真实涵闸模型尚未接入，当前版本暂时使用了一个**车辆 3D 模型**作为占位示例，用来验证整体框架、交互逻辑和渲染流程。后续可以将其替换为涵闸本体、闸门、启闭机及相关附属结构模型。
-
-## 当前版本定位
-
-当前项目处于**最初版本 / 原型阶段**，目标是先搭建一个可扩展的数字孪生前端基础框架，为后续接入真实工程模型、监测数据、状态动画和业务面板打基础。
-
-当前版本已实现：
-
-- 基于 Three.js 的 3D 场景搭建
-- 基于 GLTF 的模型加载
-- 基于 OrbitControls 的交互操作
-- 基于 Raycaster 的点击拾取
-- 模型部件选中后的高亮与信息展示
-- 页面尺寸变化时的自适应渲染
-
-当前版本暂未实现：
-
-- 真实涵闸模型接入
-- 闸门开闭状态动画
-- 传感器数据联动
-- 水位、流量、设备状态等业务信息展示
-- 后端数据接口与实时通信
-
-## 技术栈
-
-- Vue 3
-- Vite
-- Three.js
-- GLTFLoader
-- OrbitControls
-- JavaScript ES Modules
-
-## 项目结构
-
-```text
-Digital_Twin_for_Small-scale_Culvert_Gates/
-├─ public/
-│  └─ models/                  # 当前用于演示的 GLTF 模型资源
-├─ src/
-│  ├─ components/
-│  │  └─ ThreeScene.vue        # Three.js 场景、模型加载与交互逻辑
-│  ├─ styles/
-│  │  └─ main.css              # 全局样式
-│  ├─ App.vue                  # 页面主界面与信息面板
-│  └─ main.js                  # 应用入口
-├─ index.html
-├─ vite.config.js
-├─ package.json
-└─ README.md
-```
-
-## 运行方式
-
-### 1. 安装依赖
+使用 Node.js 22：
 
 ```bash
-npm install
-```
-
-### 2. 启动开发环境
-
-```bash
+npm ci
+cp .env.example .env.local
+# 在 .env.local 中配置独立数据库的连接串。
+npm run db:init
+npm run typecheck
+npm run build
 npm run dev
 ```
 
-启动后默认访问：
+建表脚本自动加载项目根目录 .env.local，进程已有环境变量优先。它只创建 public.hanzha_repair_records 表及索引，重复执行保留已有记录。
 
-```text
-http://localhost:3000
-```
+| 环境变量 | 用途 |
+| --- | --- |
+| DATABASE_URL | 应用连接串，Neon 使用 pooled 地址 |
+| DATABASE_URL_UNPOOLED | 可选，建表优先使用此直连地址 |
+| HANZHA_DB_SSL | 默认 verify-full；仅本机开发允许显式设为 disable |
 
-### 3. 构建生产版本
+连接串保存在服务端环境变量中，生产连接验证 TLS 证书与主机名。缺少数据库配置时构建仍能完成，记录接口返回 503，不回退到临时文件或本地 JSON。
+
+## Vercel 发布
+
+1. 将此目录作为 Next.js 项目根目录。若使用原 GitHub 仓库的独立部署分支，选择该分支；旧 Vue 分支仍是 Vite 应用。
+2. 新建独立 Vercel 项目，Framework 选择 Next.js，Node.js 选择 22.x，安装命令 npm ci，构建命令 npm run build，输出目录采用框架默认值。
+3. 在 Vercel Marketplace 添加 Neon，选择套餐和地域并连接新项目。集成会注入 DATABASE_URL 等变量；Production 和 Preview 环境按用途分别连接。
+4. 将目标环境变量下载到本机 .env.local，运行 npm run db:init 建表，数据库凭据不进入 Git。
+5. 发布后运行下面的只读验收，并在浏览器检查三维模型、构件选择、记录加载和扫码网址。
+
+应用的 /api/records 与页面使用同一域名。Vercel 直接构建 Next.js 源码，无需上传 ECS 的 Docker 数据卷或 Nginx 配置。
+
+官方参考：[Next.js 部署](https://vercel.com/docs/frameworks/full-stack/nextjs)、[Marketplace 数据库](https://vercel.com/docs/marketplace-storage)、[Neon](https://vercel.com/marketplace/neon)。
+
+## 端到端验收
+
+公开部署默认只读：
 
 ```bash
-npm run build
+python3 deploy/verify-vercel.py --base-url https://YOUR-PROJECT.vercel.app \
+  --output .deployment/evidence/vercel-read.json
 ```
 
-### 4. 预览构建结果
+专用测试库写入和并发验收：
 
 ```bash
-npm run preview
+python3 deploy/verify-vercel.py --base-url http://127.0.0.1:3000 \
+  --write-test --phase seed --manifest .deployment/evidence/test-manifest.json \
+  --output .deployment/evidence/postgres-seed.json
 ```
 
-## 后端接入配置
+保持同一测试数据库，重启或重新构建应用后验证持久化：
 
-当前版本支持两种后端接入方式，默认优先级如下：
-
-1. 如果配置了 `VITE_COMPONENT_QUERY_API_BASE_URL`，前端会优先使用按构件 ID 查询的接口：
-
-```text
-GET {VITE_COMPONENT_QUERY_API_BASE_URL}/{partInfo.id}
+```bash
+python3 deploy/verify-vercel.py --base-url http://127.0.0.1:3000 \
+  --phase check --manifest .deployment/evidence/test-manifest.json \
+  --output .deployment/evidence/postgres-after-restart.json
 ```
 
-示例：
+--write-test 仅用于专用测试库，生成 9 条带唯一标记的样例。脚本输出可重复核对的 JSON 报告，不删除数据。缺少或错误数据库配置的测试实例可加 --expect-unavailable 验证 503 响应。
 
-```env
-VITE_COMPONENT_QUERY_API_BASE_URL=http://172.20.10.14:5000/api/component
-```
-
-当点击统一 ID 为 `1` 的构件时，前端会请求：
-
-```text
-http://172.20.10.14:5000/api/component/1
-```
-
-2. 如果未配置上面的查询接口，但配置了 `VITE_COMPONENT_ID_API_URL`，前端会回退到旧的固定地址同步方式：
-
-```text
-POST {VITE_COMPONENT_ID_API_URL}
-```
-
-示例：
-
-```env
-VITE_COMPONENT_ID_API_URL=http://127.0.0.1:8000/component-id
-```
-
-旧接口的请求体会继续保持当前结构：
-
-```json
-{
-  "ID": "1",
-  "commentId": "1",
-  "elementId": "12345",
-  "uniqueId": "xxxxx-xxxxx",
-  "modelName": "Mesh_xxxx",
-  "componentName": "闸门",
-  "material": "混凝土",
-  "position": {
-    "x": 1.234,
-    "y": 2.345,
-    "z": 3.456
-  }
-}
-```
-
-3. 如果两个环境变量都没有配置，前端不会请求后端，而是把待处理 payload 输出到浏览器控制台，便于本地联调验证。
-
-推荐在项目根目录创建 `.env.local`，按需写入以下任意一种配置：
-
-```env
-# 新接口，优先使用
-VITE_COMPONENT_QUERY_API_BASE_URL=http://172.20.10.14:5000/api/component
-
-# 旧接口，作为兼容方案保留
-# VITE_COMPONENT_ID_API_URL=http://127.0.0.1:8000/component-id
-```
-
-## 交互说明
-
-- 鼠标左键拖动：旋转视角
-- 鼠标滚轮：缩放视角
-- 鼠标右键拖动：平移视角
-- 点击模型部件：显示当前选中部件的信息，并进行高亮
-
-## 当前实现说明
-
-项目目前已经具备一个数字孪生可视化系统的基础雏形：
-
-- 能够在浏览器中完成 3D 模型加载与显示
-- 能够对模型进行基本观察和交互
-- 能够识别被点击的模型部件
-- 能够通过界面反馈当前选中对象的信息
-
-这意味着项目已经完成了从“静态页面”到“可交互 3D 场景”的第一步，后续可以在这个框架上继续叠加真实业务能力。
-
-## 后续规划
-
-后续可以围绕“小型涵闸数字孪生”继续扩展以下方向：
-
-1. 替换当前演示车辆模型，接入真实涵闸 3D 模型。
-2. 增加闸门启闭动画，模拟设备运行过程。
-3. 接入水位、流量、闸位、设备状态等监测数据。
-4. 增加设备信息面板、告警面板和运行状态面板。
-5. 建立模型部件与业务对象之间的映射关系。
-6. 对接后端接口，实现实时数据刷新与远程控制展示。
-
-## 示例模型说明
-
-当前仓库内的车辆模型仅用于前期框架验证与交互演示，不代表项目最终的业务模型。
-
-示例模型信息如下：
-
-- 模型名称：`2022 Mercedes-Benz E-Class AMG Line`
-- 来源：Sketchfab
-- 作者：`tonielpro520`
-- 许可协议：`CC-BY-4.0`
-
-如继续公开分发或展示该示例模型，请保留原作者署名信息。详细说明见 [public/models/license.txt](./public/models/license.txt)。
-
-## 项目说明
-
-这个仓库目前更适合作为一个**数字孪生前端原型工程**来看待。它已经验证了 3D 可视化链路和基础交互逻辑，后续只需要在现有结构上逐步替换模型、补充数据、扩展业务界面，就可以继续向“小型涵闸数字孪生系统”演进。
+当前接口允许访客提交和查看演示记录，页面演示说明继续保留。正式工程应用可另行接入身份认证和权限。
